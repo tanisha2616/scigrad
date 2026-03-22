@@ -101,6 +101,42 @@ class TestLayer4(unittest.TestCase):
         np.testing.assert_allclose(a.grad.realize()._op.inputs[0], num_grad_a, rtol=1e-4, atol=1e-5)
         np.testing.assert_allclose(b.grad.realize()._op.inputs[0], num_grad_b, rtol=1e-4, atol=1e-5)
 
+    def test_max_grad_unique(self):
+        a = Tensor(np.array([1.0, 3.0, 2.0], dtype=np.float32))
+        y = a.max()
+        y.backward()
+
+        expected = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        np.testing.assert_allclose(a.grad.realize()._op.inputs[0], expected, rtol=1e-6, atol=1e-6)
+
+    def test_prod_grad(self):
+        a = Tensor(np.array([2.0, 3.0, 4.0], dtype=np.float32))
+        y = a.prod()
+        y.backward()
+
+        num_grad_a = numerical_grad(lambda x: x.prod(), a)
+        np.testing.assert_allclose(a.grad.realize()._op.inputs[0], num_grad_a, rtol=1e-3, atol=1e-4)
+
+    def test_where_grad(self):
+        cond = Tensor(np.array([1.0, 0.0, 1.0], dtype=np.float32))
+        x = Tensor(np.array([2.0, 3.0, 4.0], dtype=np.float32))
+        y = Tensor(np.array([5.0, 6.0, 7.0], dtype=np.float32))
+
+        out = cond.where(x, y).sum()
+        out.backward()
+
+        np.testing.assert_allclose(x.grad.realize()._op.inputs[0], np.array([1.0, 0.0, 1.0]), atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(y.grad.realize()._op.inputs[0], np.array([0.0, 1.0, 0.0]), atol=1e-6, rtol=1e-6)
+
+    def test_permute_grad(self):
+        x_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+        x = Tensor(x_np)
+
+        out = x.permute((1, 0, 2)).sum()
+        out.backward()
+
+        np.testing.assert_allclose(x.grad.realize()._op.inputs[0], np.ones_like(x_np, dtype=np.float64), atol=1e-6, rtol=1e-6)
+
 
 if __name__ == '__main__':
     unittest.main()

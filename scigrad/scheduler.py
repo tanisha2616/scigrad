@@ -10,7 +10,11 @@ class KernelSpec:
 
 def schedule(op: UOp) -> List[KernelSpec]:
     """
-    Schedules a UOp for execution by creating a single, topologically sorted kernel.
+    Schedules a UOp into topologically sorted kernel groups.
+
+    Fusion policy (current):
+    - Adjacent non-boundary ops are grouped together.
+    - Reduction/materialization ops terminate a group.
     """
     topo_order = []
     visited = set()
@@ -26,11 +30,24 @@ def schedule(op: UOp) -> List[KernelSpec]:
 
     _visit(op)
 
-    kernel_uops = [u for u in topo_order if u.op != "LOAD"]
-    if not kernel_uops:
+    non_load_uops = [u for u in topo_order if u.op != "LOAD"]
+    if not non_load_uops:
         return []
 
-    # All LOAD ops are inputs to this single kernel
     kernel_inputs = {u.uid: u.inputs[0] for u in topo_order if u.op == "LOAD"}
 
-    return [KernelSpec(uops=kernel_uops, inputs=kernel_inputs)]
+    boundary_ops = {"REDUCE_SUM", "REDUCE_MAX", "REDUCE_PROD", "CONTIGUOUS"}
+
+    kernels: List[KernelSpec] = []
+    current_group: List[UOp] = []
+
+    for u in non_load_uops:
+        current_group.append(u)
+        if u.op in boundary_ops:
+            kernels.append(KernelSpec(uops=current_group.copy(), inputs=kernel_inputs))
+            current_group = []
+
+    if current_group:
+        kernels.append(KernelSpec(uops=current_group, inputs=kernel_inputs))
+
+    return kernels
