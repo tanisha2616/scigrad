@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scigrad"
+version = "0.1.0"
+description = "Lazy tensor computation and autodiff for scientific and ML workloads"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "scigrad contributors" }]
+dependencies = [
+  "numpy>=1.26,<3.0"
+]
+
+[project.optional-dependencies]
+opencl = ["pyopencl>=2024.0"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["scigrad*"]

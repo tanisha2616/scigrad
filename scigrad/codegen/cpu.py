@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 from scigrad.tensor import UOp
 from scigrad.kernel import KernelSpec
 
@@ -11,7 +11,7 @@ class CPUBackend:
     def __init__(self):
         self._cache: Dict[UOp, np.ndarray] = {}
 
-    def run(self, kernel: KernelSpec, persist_nodes: Optional[Set[UOp]] = None):
+    def run(self, kernel: KernelSpec, input_refcount: Optional[Dict[UOp, int]] = None):
         """
         Executes a KernelSpec. For the CPU backend, this means interpreting
         the UOps and calling the corresponding NumPy functions.
@@ -41,6 +41,16 @@ class CPUBackend:
                         raise RuntimeError(f"Intermediate input {inp_node} not found in caches!")
                 else: # It's a raw np.ndarray from a CONST op
                     inputs.append(inp_node)
+
+            if input_refcount is not None:
+                for inp_node in node.inputs:
+                    if isinstance(inp_node, UOp) and inp_node.op != 'LOAD':
+                        remaining = input_refcount.get(inp_node, 0)
+                        if remaining > 0:
+                            remaining -= 1
+                            input_refcount[inp_node] = remaining
+                            if remaining == 0 and inp_node in self._cache:
+                                del self._cache[inp_node]
 
             # Execute the operation
             if node.op == 'CONST':
@@ -127,18 +137,14 @@ class CPUBackend:
             
             local_cache[node] = result
 
-        # Persist only nodes required by downstream kernels (plus the output).
         output_uop = kernel.uops[-1]
         final_result = local_cache[output_uop]
-        if persist_nodes is None:
-            persist_nodes = {output_uop}
-        else:
-            persist_nodes = set(persist_nodes)
-            persist_nodes.add(output_uop)
 
-        for node in persist_nodes:
-            if node in local_cache:
-                self._cache[node] = local_cache[node]
+        for node, arr in local_cache.items():
+            if node.op == 'LOAD':
+                continue
+            if node is output_uop or (input_refcount is not None and input_refcount.get(node, 0) > 0):
+                self._cache[node] = arr
 
         return final_result
 
@@ -175,15 +181,15 @@ class CPUBackend:
             # The root op was a LOAD or CONST, so no kernels were generated.
             return self._cache[root_op]
 
-        final_result = None
-        for ki, k in enumerate(kernels):
-            future_needed: Set[UOp] = set()
-            for fk in kernels[ki + 1:]:
-                for fu in fk.uops:
-                    for fin in fu.inputs:
-                        if isinstance(fin, UOp) and fin.op != 'LOAD':
-                            future_needed.add(fin)
+        input_refcount: Dict[UOp, int] = {}
+        for k in kernels:
+            for node in k.uops:
+                for inp in node.inputs:
+                    if isinstance(inp, UOp) and inp.op != 'LOAD':
+                        input_refcount[inp] = input_refcount.get(inp, 0) + 1
 
-            final_result = self.run(k, persist_nodes=future_needed)
+        final_result = None
+        for k in kernels:
+            final_result = self.run(k, input_refcount=input_refcount)
             
         return final_result

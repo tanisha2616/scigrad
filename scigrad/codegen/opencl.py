@@ -2,6 +2,7 @@ import numpy as np
 import pyopencl as cl
 import hashlib
 import os
+import tempfile
 from typing import Dict, List, Tuple, Any
 
 from scigrad.tensor import UOp
@@ -147,11 +148,45 @@ class OpenCLBackend:
     def __init__(self):
         self.ctx = cl.create_some_context(interactive=False)
         self.queue = cl.CommandQueue(self.ctx)
+        self.device = self.queue.device
         self._cache: Dict[UOp, cl.Buffer] = {}
         self._prog_cache: Dict[str, cl.Program] = {}
         self.verbose = int(os.getenv("VERBOSE", "0"))
         self._cpu_fallback = CPUBackend()
         self._allow_unsafe_opencl = os.environ.get("SCIGRAD_OPENCL_ALLOW_UNSAFE", "0") == "1"
+        self._disk_cache_dir = os.path.join(tempfile.gettempdir(), "scigrad_opencl_cache")
+        os.makedirs(self._disk_cache_dir, exist_ok=True)
+
+    def _cache_key(self, source: str) -> str:
+        return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    def _cache_bin_path(self, key: str) -> str:
+        return os.path.join(self._disk_cache_dir, f"{key}.bin")
+
+    def _build_program(self, source: str) -> cl.Program:
+        key = self._cache_key(source)
+        bin_path = self._cache_bin_path(key)
+
+        if os.path.exists(bin_path):
+            try:
+                with open(bin_path, "rb") as f:
+                    binary = f.read()
+                program = cl.Program(self.ctx, [self.device], [binary])
+                program.build()
+                return program
+            except Exception:
+                pass
+
+        program = cl.Program(self.ctx, source).build()
+        try:
+            binaries = program.binaries
+            if binaries and len(binaries) > 0:
+                with open(bin_path, "wb") as f:
+                    f.write(binaries[0])
+        except Exception:
+            pass
+
+        return program
 
     def _kernel_supported(self, kernel: KernelSpec) -> bool:
         """
@@ -170,7 +205,7 @@ class OpenCLBackend:
         
         # Cache the compiled program
         if code not in self._prog_cache:
-            self._prog_cache[code] = cl.Program(self.ctx, code).build()
+            self._prog_cache[code] = self._build_program(code)
         
         prg = self._prog_cache[code]
 
